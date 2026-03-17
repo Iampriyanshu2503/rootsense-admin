@@ -65,11 +65,13 @@ export default function AdminPanel() {
     const fetchAll = useCallback(async (silent = false) => {
         if (!silent) setLoading(true); else setSyncing(true);
         try {
-            const [{ data: cu, error: ue }, { data: cc, error: ce }] = await Promise.all([
-                supabase.from("users").select("*").order("created_at", { ascending: false }),
+            const [usersRes, { data: cc, error: ce }] = await Promise.all([
+                fetch("/api/users").then(r => r.json()),
                 supabase.from("clusters_main_data").select("*").order("created_at", { ascending: false }),
             ]);
-            if (ue) throw ue; if (ce) throw ce;
+            if (ce) throw ce;
+            if (usersRes.error) throw new Error(usersRes.error);
+            const cu = usersRes.users || [];
             if (cu) setUsers(cu);
             if (cc) {
                 // detect NEW pending clusters and push notifications

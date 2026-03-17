@@ -3,12 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// Search uses API route with service role key to bypass RLS and see ALL users
 
 type User = {
     id: string;
@@ -37,6 +32,7 @@ export default function AdminSearchPage() {
 
     const [input, setInput]             = useState("");
     const [allUsers, setAllUsers]       = useState<User[]>([]);
+    const [usersLoaded, setUsersLoaded] = useState(false);
     const [suggestions, setSuggestions] = useState<User[]>([]);
     const [searched, setSearched]       = useState(false);
     const [result, setResult]           = useState<User | null | "not_found">(null);
@@ -45,16 +41,16 @@ export default function AdminSearchPage() {
     const [emailError, setEmailError]   = useState("");
     const [debugInfo, setDebugInfo]     = useState("");
 
-    /* ── fetch all users on mount for suggestions ── */
+    /* ── fetch all users on mount — service role via API route ── */
     useEffect(() => {
-        supabase
-            .from("users")
-            .select("id, email, created_at")
-            .order("created_at", { ascending: false })
-            .then(({ data, error }) => {
-                if (data) setAllUsers(data);
-                if (error) console.error("[AdminSearch] mount fetch error:", error);
-            });
+        fetch("/api/users")
+            .then(r => r.json())
+            .then(({ users, error }) => {
+                console.log("[AdminSearch] API returned:", users?.length, "users", error ? "error:" + error : "");
+                if (users) { setAllUsers(users); setUsersLoaded(true); }
+                if (error) console.error("[AdminSearch] API error:", error);
+            })
+            .catch(e => console.error("[AdminSearch] fetch error:", e));
     }, []);
 
     /* ── live suggestions ── */
@@ -86,35 +82,23 @@ export default function AdminSearchPage() {
         setSearched(false);
         setDebugInfo("");
 
-        // Step 1: try ilike (case-insensitive) query on Supabase
-        const { data: rows, error } = await supabase
-            .from("users")
-            .select("id, email, created_at")
-            .ilike("email", email);
-
-        console.log("[AdminSearch] ilike query:", email, "| rows:", rows, "| error:", error);
-
-        if (error) {
-            setEmailError(`Database error: ${error.message}`);
-            setLoading(false);
-            return;
+        // Always fetch fresh from API to avoid stale state issues
+        let searchPool = allUsers;
+        if (!usersLoaded || allUsers.length === 0) {
+            try {
+                const res = await fetch("/api/users");
+                const { users, error: apiErr } = await res.json();
+                console.log("[AdminSearch] re-fetched:", users?.length, apiErr);
+                if (users) { setAllUsers(users); setUsersLoaded(true); searchPool = users; }
+            } catch (e) { console.error("[AdminSearch] refetch error:", e); }
         }
 
-        // Step 2: find exact match from results
-        let match: User | null = rows?.find(
+        const match: User | null = searchPool.find(
             u => u.email?.trim().toLowerCase() === email
         ) ?? null;
 
-        // Step 3: fallback — check already-fetched allUsers (in case RLS blocks the query)
-        if (!match) {
-            match = allUsers.find(
-                u => u.email?.trim().toLowerCase() === email
-            ) ?? null;
-        }
-
-        // Debug info (shown in dev)
         setDebugInfo(
-            `Searched: "${email}" | DB rows: ${rows?.length ?? 0} | allUsers: ${allUsers.length} | match: ${match?.email ?? "none"}`
+            `Searched: "${email}" | pool: ${searchPool.length} users | match: ${match?.email ?? "none"}`
         );
 
         setResult(match ?? "not_found");
